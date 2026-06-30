@@ -3,13 +3,25 @@ name: Build
 on:
   push:
   pull_request:
-  schedule:
-    - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
+    inputs:
+      continue_loop:
+        description: 'Queue another run after this one succeeds.'
+        type: boolean
+        required: false
+        default: true
+      delay_seconds:
+        description: 'Seconds to wait before queuing the next run.'
+        required: false
+        default: '600'
 
 permissions:
   actions: write
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -48,8 +60,18 @@ jobs:
             artifacts/logs/build.complog
           if-no-files-found: error
 
-      - name: Disable workflow after scheduled failure
-        if: failure() && github.event_name == 'schedule'
+      - name: Queue next build
+        if: success() && github.event_name == 'workflow_dispatch' && inputs.continue_loop
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api --method PUT repos/${{ github.repository }}/actions/workflows/build.yml/disable
+          DELAY_SECONDS: ${{ inputs.delay_seconds }}
+        run: |
+          case "$DELAY_SECONDS" in
+            ''|*[!0-9]*)
+              echo "::error::delay_seconds must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+
+          sleep "$DELAY_SECONDS"
+          gh workflow run build.yml --ref main -f continue_loop=true -f delay_seconds=600
